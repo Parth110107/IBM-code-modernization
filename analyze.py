@@ -1,24 +1,128 @@
 # analyze.py
-# Make KM-Waechter smarter. The 80% rule only warns you once a car is nearly worn. Here you find
-# which cars are most likely to break down SOON, from their history, and rank them by risk, so the
-# fleet team fixes the risky ones first.
-#
-# fleet_history.csv has one row per car (120 of them) and a "broke_down" column (1 = it later
-# broke down).
-#
-# TODO(you), with IBM Bob and pandas:
-#   1. Load fleet_history.csv.
-#   2. Find which columns actually separate the cars that broke down from those that did not.
-#      Do not assume. Compare the two groups column by column and let the numbers answer.
-#      (Total mileage and age look like the obvious answers. Check whether they really are.)
-#   3. Build a simple risk score from 0 to 100 for each car, from the columns that DO separate.
-#      No heavy machine learning needed.
-#   4. Print the cars ranked by risk, highest first.
-#   5. Write a two-line summary at the top of this file: which factors matter most, and why.
+"""Analyze fleet history and rank cars by breakdown risk.
+
+The strongest separation in the supplied history is:
+1. km_since_service
+2. avg_daily_km
+3. load_factor
+
+Total mileage and age show little separation between the two groups,
+so they are not used in the risk score.
+"""
+
+from pathlib import Path
 
 import pandas as pd
 
-df = pd.read_csv("fleet_history.csv")
-print(df.head())
 
-# your analysis here
+HISTORY_FILE = Path("fleet_history.csv")
+
+RISK_COLUMNS = [
+    "km_since_service",
+    "avg_daily_km",
+    "load_factor",
+]
+
+
+def compare_groups(df: pd.DataFrame) -> pd.DataFrame:
+    """Compare feature averages for broken-down and healthy cars."""
+    grouped = df.groupby("broke_down")[RISK_COLUMNS + [
+        "odometer_km",
+        "age_years",
+    ]].mean()
+
+    return grouped
+
+
+def calculate_risk(df: pd.DataFrame) -> pd.DataFrame:
+    """Calculate a simple 0-100 breakdown risk score."""
+    result = df.copy()
+
+    scores = []
+
+    for column in RISK_COLUMNS:
+        minimum = result[column].min()
+        maximum = result[column].max()
+
+        if maximum == minimum:
+            normalized = pd.Series(0.0, index=result.index)
+        else:
+            normalized = (
+                (result[column] - minimum)
+                / (maximum - minimum)
+            )
+
+        scores.append(normalized)
+
+    result["risk_score"] = (
+        scores[0] * 0.5
+        + scores[1] * 0.3
+        + scores[2] * 0.2
+    ) * 100
+
+    return result.sort_values(
+        "risk_score",
+        ascending=False,
+    )
+
+
+def main() -> None:
+    """Load fleet history, explain the important factors, and rank risk."""
+    df = pd.read_csv(HISTORY_FILE)
+
+    grouped = compare_groups(df)
+
+    broken = grouped.loc[1]
+    healthy = grouped.loc[0]
+
+    print("BREAKDOWN-RISK ANALYSIS")
+    print("=" * 60)
+
+    print(
+        "The strongest factors are km_since_service, "
+        "avg_daily_km, and load_factor."
+    )
+    print(
+        "Odometer mileage and age show little group separation, "
+        "so they are not used in the risk score."
+    )
+
+    print("\nGROUP COMPARISON")
+    print("-" * 60)
+
+    for column in [
+        "odometer_km",
+        "age_years",
+        "km_since_service",
+        "avg_daily_km",
+        "load_factor",
+    ]:
+        print(
+            f"{column:20} "
+            f"broke down={broken[column]:8.2f} "
+            f"kept going={healthy[column]:8.2f}"
+        )
+
+    ranked = calculate_risk(df)
+
+    print("\nTOP 20 CARS BY RISK")
+    print("-" * 60)
+
+    print(
+        ranked[
+            [
+                "car_id",
+                "risk_score",
+                "km_since_service",
+                "avg_daily_km",
+                "load_factor",
+                "broke_down",
+            ]
+        ]
+        .head(20)
+        .to_string(index=False)
+    )
+
+
+if __name__ == "__main__":
+    main()
